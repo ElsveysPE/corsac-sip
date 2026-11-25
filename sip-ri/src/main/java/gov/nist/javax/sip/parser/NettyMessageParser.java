@@ -22,8 +22,11 @@ package gov.nist.javax.sip.parser;
 import java.nio.charset.Charset;
 import java.text.ParseException;
 
+import javax.sip.ListeningPoint;
+
 import gov.nist.core.CommonLogger;
 import gov.nist.core.LogWriter;
+import gov.nist.core.Separators;
 import gov.nist.core.StackLogger;
 import gov.nist.javax.sip.SIPConstants;
 import gov.nist.javax.sip.header.CSeq;
@@ -174,15 +177,10 @@ public class NettyMessageParser {
 				return;
 			}
 			byteBuf.skipBytes(length);			
-			if(lineIgnoreCase.startsWith(ContentLength.NAME_LOWER)) { 
+			if(isContentLength(lineIgnoreCase)) { 
 				// naive Content-Length header parsing to figure out how much bytes 
 				// of message body must be read after the SIP headers
-				contentLength = Integer.parseInt(line.substring(
-						ContentLength.NAME_LOWER.length()+1).trim());
-			} else if(lineIgnoreCase.startsWith(CONTENT_LENGTH_COMPACT_NAME)) { 
-				// issue with compact header form
-				contentLength = Integer.parseInt(line.substring(
-						CONTENT_LENGTH_COMPACT_NAME.length()+1).trim());
+				contentLength = parseContentLength(line);
 			} else if(lineIgnoreCase.equalsIgnoreCase(SIPMessage.SINGLE_CRLF)) {
 				if(parsingState == ParsingState.INIT) {
 					// in case of single CLRF we continue the processing as we may be in a double CRLF Situation
@@ -194,11 +192,16 @@ public class NettyMessageParser {
 					parsingState = ParsingState.DOUBLE_CRLF;										
 					return;
 				} 					
-				if((parsingState == ParsingState.READING_HEADER_LINES || parsingState == ParsingState.READING_EMPTY_LINE) && 
-					contentLength >= 0) {
-					// if we saw a Content-Length header and we are in CRLF case we can stop processing headers
-					// as we are in a split message case
-					parsingState = ParsingState.READING_EMPTY_LINE;																										
+				if(parsingState == ParsingState.READING_HEADER_LINES || parsingState == ParsingState.READING_EMPTY_LINE) {
+					if(contentLength < 0 && isUdp()) {
+						// RFC 3261 18.3: without Content-Length the body ends with the datagram
+						contentLength = byteBuf.readableBytes();
+					}
+					if(contentLength >= 0) {
+						// if we saw a Content-Length header and we are in CRLF case we can stop processing headers
+						// as we are in a split message case
+						parsingState = ParsingState.READING_EMPTY_LINE;
+					}
 				}
 			}
 			if(parsingState == ParsingState.INIT) {
@@ -257,6 +260,33 @@ public class NettyMessageParser {
 		}
 	}
 
+	//the header name is the text before ':', not a prefix of the line
+	private static boolean isContentLength(String lineIgnoreCase) {
+		int colon = lineIgnoreCase.indexOf(Separators.COLON);
+		if(colon < 0) {
+			return false;
+		}
+		String name = lineIgnoreCase.substring(0, colon).trim();
+		return name.equals(ContentLength.NAME_LOWER) || name.equals(CONTENT_LENGTH_COMPACT_NAME);
+	}
+
+	//-1 when not a number, processHeader reports it as a malformed mandatory header
+	private static int parseContentLength(String line) {
+		try {
+			return Integer.parseInt(line.substring(line.indexOf(Separators.COLON) + 1).trim());
+		} catch (NumberFormatException e) {
+			return -1;
+		}
+	}
+
+	private boolean isUdp() {
+		if(sipMessage == null) {
+			return false;
+		}
+		Via via = sipMessage.getTopmostVia();
+		return via != null && ListeningPoint.UDP.equalsIgnoreCase(via.getTransport());
+	}
+
 	private static boolean isMandatory(Class<?> headerClass) {
 		return headerClass != null && (headerClass.equals(From.class) || headerClass.equals(To.class)
 				|| headerClass.equals(CSeq.class) || headerClass.equals(Via.class)
@@ -276,6 +306,13 @@ public class NettyMessageParser {
 				parseException = e;
 			}
 			byteBuf.skipBytes(contentLength);						
+			parsingState = ParsingState.PARSING_COMPLETE;
+		} else if(isUdp()) {
+			// RFC 3261 18.3: the datagram ends before the body, a request gets 400, a response is dropped
+			parseException = new ParseException("Content-Length " + contentLength
+					+ " past the end of the datagram", byteBuf.readerIndex());
+			malformed = true;
+			byteBuf.skipBytes(readableBytes);
 			parsingState = ParsingState.PARSING_COMPLETE;
 		} else {
 			parsingState = ParsingState.READING_PARTIAL_MESSAGE_BODY_CONTENTS;

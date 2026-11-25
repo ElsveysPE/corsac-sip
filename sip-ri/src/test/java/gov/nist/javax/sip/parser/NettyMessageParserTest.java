@@ -65,7 +65,7 @@ public class NettyMessageParserTest extends junit.framework.TestCase {
             + "CSeq: 1 INVITE\r\n"
             + "From: <sip:0000100200000c@p25dr;user=TIA-P25-SU>;tag=841\r\n"
             + "To: <sip:00001002000022@p25dr;user=TIA-P25-SU>\r\n"
-            + "Via: SIP/2.0/UDP 02.002.00001.p25dr;branch=z9hG4bKa10f04383e3d8e8dbf3f6d06f6bb6880\r\n"
+            + "Via: SIP/2.0/TCP 02.002.00001.p25dr;branch=z9hG4bKa10f04383e3d8e8dbf3f6d06f6bb6880\r\n"
             + "Max-Forwards: 70\r\n"
             + "Contact: <sip:02.002.00001.p25dr>\r\n"
             + "Call-ID: c6a12ddad0ddc1946d9f443c884a7768@127.0.0.1\r\n"
